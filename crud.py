@@ -19,7 +19,7 @@ async def get_report_by_code(db: AsyncSession, report_code: str):
 
 async def create_report(db: AsyncSession, report: schemas.ReportCreate):
     """Create a new report in the database."""
-    db_report = models.Report(**report.model_dump())
+    db_report = models.Report(**report.model_dump(exclude={'owner'}))
     db.add(db_report)
     await db.flush()
     await db.refresh(db_report)

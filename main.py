@@ -136,10 +136,10 @@ async def _process_report_background(report_code: str, db: AsyncSession):
             fight_lookup[db_fight.wcl_fight_id] = db_fight # Map WCL Fight ID to DB Fight object
             logger.debug(f"Processed fight WCL ID {db_fight.wcl_fight_id}, DB ID {db_fight.id}")
 
-        # 3. Process players from master_data, creating a lookup map
+        # 3. Process actors from master_data, creating a lookup map
         player_lookup = {}
         master_actors = master_data.get("actors", [])
-        logger.info(f"Processing {len(master_actors)} players from master data.")
+        logger.info(f"Processing {len(master_actors)} actors from master data.") # Changed 'players' to 'actors'
         for actor in master_actors:
             player_in = schemas.PlayerCreate(
                 wcl_actor_id=actor.get("id"),
@@ -176,7 +176,7 @@ async def _process_report_background(report_code: str, db: AsyncSession):
             # Get the corresponding DB fight object using the WCL fight ID
             db_fight = fight_lookup.get(wcl_fight_id)
             if not db_fight:
-                # logger.warning(f"Skipping event: Could not find fight with WCL ID {wcl_fight_id}")
+                logger.warning(f"Skipping event: Could not find fight with WCL ID {wcl_fight_id}")
                 continue # Skip event if its fight wasn't found/processed
 
             # Map WCL source/target Actor IDs to DB Player IDs
@@ -189,13 +189,13 @@ async def _process_report_background(report_code: str, db: AsyncSession):
 
             # Basic validation
             if timestamp_ms is None or ability_game_id is None:
-                 # logger.warning(f"Skipping event due to missing timestamp or ability ID: {event}")
+                 logger.warning(f"Skipping event due to missing timestamp or ability ID: {event}")
                  continue
 
             # --- Event Type Specific Processing ---
             if event_type == "cast":
                 if not source_player_id:
-                    # logger.warning(f"Skipping cast event: Missing source player ID for WCL ID {source_wcl_id}. Event: {event}")
+                    logger.warning(f"Skipping cast event: Missing source player ID for WCL ID {source_wcl_id}. Event: {event}")
                     continue # Casts must have a source player
 
                 cast_event_in = schemas.PlayerCastEventCreate(
@@ -210,7 +210,7 @@ async def _process_report_background(report_code: str, db: AsyncSession):
 
             elif event_type in ["applybuff", "removebuff", "applydebuff", "removedebuff", "applybuffstack", "removebuffstack"]:
                 if not target_player_id:
-                    # logger.warning(f"Skipping buff event: Missing target player ID for WCL ID {target_wcl_id}. Event: {event}")
+                    logger.warning(f"Skipping buff event: Missing target player ID for WCL ID {target_wcl_id}. Event: {event}")
                     continue # Buffs must have a target player
 
                 buff_event_in = schemas.BuffEventCreate(
@@ -226,10 +226,10 @@ async def _process_report_background(report_code: str, db: AsyncSession):
 
             elif event_type == "damage":
                 if not source_player_id:
-                    # logger.warning(f"Skipping damage event: Missing source player ID for WCL ID {source_wcl_id}. Event: {event}")
+                    logger.warning(f"Skipping damage event: Missing source player ID for WCL ID {source_wcl_id}. Event: {event}")
                     continue # Damage must have a source player in our model
                 if not target_player_id and not target_npc_wcl_id:
-                    # logger.warning(f"Skipping damage event: Missing target player/NPC ID. Event: {event}")
+                    logger.warning(f"Skipping damage event: Missing target player/NPC ID. Event: {event}")
                     continue # Damage must have a target (player or NPC)
 
                 damage_event_in = schemas.DamageEventCreate(
@@ -249,10 +249,10 @@ async def _process_report_background(report_code: str, db: AsyncSession):
 
             elif event_type == "heal":
                 if not source_player_id:
-                    # logger.warning(f"Skipping heal event: Missing source player ID for WCL ID {source_wcl_id}. Event: {event}")
+                    logger.warning(f"Skipping heal event: Missing source player ID for WCL ID {source_wcl_id}. Event: {event}")
                     continue # Heal must have a source player
                 if not target_player_id and not target_npc_wcl_id:
-                    # logger.warning(f"Skipping heal event: Missing target player/NPC ID. Event: {event}")
+                    logger.warning(f"Skipping heal event: Missing target player/NPC ID. Event: {event}")
                     continue # Heal must have a target (player or NPC)
 
                 heal_event_in = schemas.HealEventCreate(
@@ -271,7 +271,7 @@ async def _process_report_background(report_code: str, db: AsyncSession):
 
             elif event_type == "death":
                 if not target_player_id and not target_npc_wcl_id:
-                    # logger.warning(f"Skipping death event: Missing target player/NPC ID. Event: {event}")
+                    logger.warning(f"Skipping death event: Missing target player/NPC ID. Event: {event}")
                     continue # Death must have a target (player or NPC)
 
                 killing_blow_wcl_id = event.get("killingBlowActor")

@@ -128,7 +128,9 @@ async def fetch_report_data(report_code: str) -> dict | None:
     logger.info(f"Fetching report data for {report_code}")
     token = await get_access_token()
     if not token:
+        logger.error(f"WCL_SERVICE: Failed to get access token for {report_code}. Aborting fetch.")
         return None
+    logger.debug(f"WCL_SERVICE: Successfully obtained token for {report_code}.")
 
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     variables = {"reportCode": report_code}
@@ -161,9 +163,10 @@ async def fetch_report_data(report_code: str) -> dict | None:
                         averageItemLevel
                     }
                     masterData(translate: true) {
-                        actors(type: "Player") {
+                        actors {
                             id
                             name
+                            type
                             subType
                             server
                         }
@@ -178,12 +181,14 @@ async def fetch_report_data(report_code: str) -> dict | None:
         """
         try:
             logger.info(f"Fetching metadata for report {report_code}")
+            logger.debug(f"WCL_SERVICE: Attempting metadata POST to {WCL_API_V2_URL} for {report_code}")
             metadata_response = await client.post(
                 WCL_API_V2_URL, # Use constant for V2 API
                 json={"query": metadata_query, "variables": variables},
                 headers=headers,
             )
             metadata_response.raise_for_status()
+            logger.debug(f"WCL_SERVICE: Metadata POST successful for {report_code} (Status: {metadata_response.status_code})")
             report_data_root = metadata_response.json().get("data", {}).get("reportData", {})
             report_info = report_data_root.get("report", {})
             if not report_info:
@@ -192,13 +197,15 @@ async def fetch_report_data(report_code: str) -> dict | None:
             else:
                 fights_raw = report_info.get("fights", [])
                 master_data = report_info.get("masterData", {})
-                logger.debug(f"WCL_SERVICE: Extracted metadata, {len(fights_raw)} fights, actors: {len(master_data.get('actors', []))}")
+                logger.debug(f"WCL_SERVICE: Extracted metadata, {len(fights_raw)} fights, actors: {len(master_data.get('actors', []))} with types")
 
         except httpx.HTTPStatusError as e:
             logger.error(f"HTTP error fetching metadata for {report_code}: {e.response.status_code} - {e.response.text}")
+            logger.error(f"WCL_SERVICE: Metadata fetch failed for {report_code} due to HTTPStatusError.", exc_info=True)
             return None
         except Exception as e:
             logger.error(f"Error fetching metadata for {report_code}: {e}", exc_info=True)
+            logger.error(f"WCL_SERVICE: Metadata fetch failed for {report_code} due to generic Exception.", exc_info=True)
             return None
 
         # Extract necessary info for event query
@@ -217,44 +224,62 @@ async def fetch_report_data(report_code: str) -> dict | None:
         if not fight_ids or start_time is None or end_time is None:
             logger.warning(f"Missing data needed for event query (fights/times) for {report_code}. Skipping event fetch.")
         else:
-            # Fetch events for ALL fights using the SAME client
-            event_variables = {
-                "reportCode": report_code,
-                "fightIDs": fight_ids,
-                "startTime": 0,
-                "endTime": end_time - start_time,
-                "limit": 10000
-            }
-            event_query = """
-            query ReportEvents($reportCode: String!, $fightIDs: [Int], $startTime: Float!, $endTime: Float!, $limit: Int) {
-                reportData {
-                    report(code: $reportCode) {
-                        events(fightIDs: $fightIDs, startTime: $startTime, endTime: $endTime, limit: $limit) {
-                            data
-                            nextPageTimestamp
+            # Fetch events for ALL fights using the SAME client, handling pagination
+            current_start_time = 0 # Start from the beginning for the first request
+            report_duration = end_time - start_time
+            logger.info(f"Fetching events for report {report_code}, fights: {fight_ids}, duration: {report_duration}ms")
+
+            while current_start_time is not None:
+                event_variables = {
+                    "reportCode": report_code,
+                    "fightIDs": fight_ids,
+                    "startTime": current_start_time,
+                    "endTime": report_duration,
+                    "limit": 10000 # WCL API max/default
+                }
+                event_query = """
+                query ReportEvents($reportCode: String!, $fightIDs: [Int], $startTime: Float!, $endTime: Float!, $limit: Int) {
+                    reportData {
+                        report(code: $reportCode) {
+                            events(fightIDs: $fightIDs, startTime: $startTime, endTime: $endTime, limit: $limit) {
+                                data
+                                nextPageTimestamp
+                            }
                         }
                     }
                 }
-            }
-            """
-            try:
-                logger.info(f"Fetching events for report {report_code}, fights: {fight_ids}")
-                event_response = await client.post(
-                    WCL_API_V2_URL, # Use constant for V2 API
-                    json={"query": event_query, "variables": event_variables},
-                    headers=headers,
-                )
-                event_response.raise_for_status()
-                event_data_container = event_response.json().get("data", {}).get("reportData", {}).get("report", {}).get("events", {})
-                all_events_combined = event_data_container.get("data", [])
-                logger.info(f"Fetched {len(all_events_combined)} events for report {report_code}")
-                # TODO: Implement pagination using nextPageTimestamp if necessary
-            except httpx.HTTPStatusError as e:
-                 logger.error(f"HTTP error fetching events for {report_code}: {e.response.status_code} - {e.response.text}")
-                 # Continue without events, maybe?
-            except Exception as e:
-                logger.error(f"Error fetching events for report {report_code}: {e}", exc_info=True)
-                # Continue without events
+                """
+                try:
+                    logger.debug(f"Fetching event page starting at {current_start_time}ms for report {report_code}")
+                    event_response = await client.post(
+                        WCL_API_V2_URL, # Use constant for V2 API
+                        json={"query": event_query, "variables": event_variables},
+                        headers=headers,
+                    )
+                    event_response.raise_for_status()
+                    event_response_data = event_response.json().get("data", {}).get("reportData", {}).get("report", {})
+                    events_data = event_response_data.get("events", {}) if event_response_data else {}
+                    page_events = events_data.get("data", [])
+                    all_events_combined.extend(page_events)
+                    next_page_timestamp = events_data.get("nextPageTimestamp")
+
+                    logger.debug(f"WCL_SERVICE: Fetched {len(page_events)} events. Total so far: {len(all_events_combined)}. Next page timestamp: {next_page_timestamp}")
+
+                    # Prepare for next iteration
+                    current_start_time = next_page_timestamp # None if this was the last page
+
+                except httpx.HTTPStatusError as e:
+                    logger.error(f"HTTP error fetching events page for {report_code} (start={current_start_time}): {e.response.status_code} - {e.response.text}")
+                    current_start_time = None # Stop pagination on error
+                    # Decide if we should return partial data or fail completely
+                    # For now, let's continue with what we have, but log the error.
+                    break # Exit pagination loop
+                except Exception as e:
+                    logger.error(f"Error fetching events page for {report_code} (start={current_start_time}): {e}", exc_info=True)
+                    current_start_time = None # Stop pagination on error
+                    break # Exit pagination loop
+
+            logger.info(f"Finished fetching events for {report_code}. Total events fetched: {len(all_events_combined)}")
 
     # Process fights (outside the client block)
     processed_fights = [
