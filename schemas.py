@@ -1,5 +1,5 @@
 from pydantic import BaseModel, HttpUrl, ConfigDict
-from typing import List, Optional
+from typing import List, Optional, Dict, Set
 from datetime import datetime
 
 # Forward declaration for relationship typing
@@ -109,6 +109,28 @@ class ReportDetail(ReportBase): # Now inherits from the defined ReportBase
     id: int
     fights: List[FightDetail] # List of detailed fights
     model_config = ConfigDict(from_attributes=True)
+
+# --- Aggregation Schemas ---
+class PlayerGroupStats(BaseModel):
+    """Detailed stats for a player within a group aggregation."""
+    player_name: str
+    boss_names: List[str] # List of unique boss names encountered
+    total_damage: float
+    total_healing: float
+    model_config = ConfigDict(from_attributes=True) # If needed later
+
+class GroupDefinitionRequest(BaseModel):
+    """Defines groups of players for aggregation.
+    Key: Group name (e.g., 'group1')
+    Value: List of player names (e.g., ['PlayerA', 'PlayerB'])
+    """
+    groups: Dict[str, List[str]]
+
+class GroupStatsResponse(BaseModel):
+    """Shows aggregated stats per group, broken down by player."""
+    # Key: Group name
+    # Value: List of player stats within that group
+    group_stats: Dict[str, List[PlayerGroupStats]]
 
 # --- API Input Schema ---
 class ReportProcessRequest(BaseModel):

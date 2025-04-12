@@ -3,7 +3,9 @@ from sqlalchemy.future import select
 import models
 import schemas
 import logging
-from typing import Optional
+from typing import Optional, Dict, List
+from sqlalchemy.orm import selectinload
+from sqlalchemy import func, select, and_
 
 logger = logging.getLogger(__name__)
 
@@ -81,3 +83,88 @@ async def get_detailed_report_by_code(db: AsyncSession, report_code: str) -> Opt
         )
     )
     return result.scalars().first()
+
+# --- Aggregation CRUD ---
+async def aggregate_stats_by_group(
+    db: AsyncSession,
+    report_code: str,
+    groups: Dict[str, List[str]],
+    boss_name: Optional[str] = None
+) -> Dict[str, List[schemas.PlayerGroupStats]]:
+    """Calculates detailed damage and healing stats for players within predefined groups
+       in a report, optionally filtered by a specific boss name.
+    """
+    report = await get_report_by_code(db, report_code)
+    if not report:
+        logger.warning(f"Aggregation requested for non-existent report: {report_code}")
+        return {}
+
+    # Consolidate all unique player names across all groups for a single query
+    all_player_names = set(p for names in groups.values() for p in names)
+    if not all_player_names:
+        return {group_name: [] for group_name in groups} # Return empty lists for all groups
+
+    # Build the base query to fetch individual fight stats for relevant players
+    query = (
+        select(
+            models.Player.name,
+            models.Fight.name.label("boss_name"), # Use label for clarity
+            models.PlayerFightStats.damage_done,
+            models.PlayerFightStats.healing_done
+        )
+        .join(models.PlayerFightStats, models.Player.id == models.PlayerFightStats.player_id)
+        .join(models.Fight, models.PlayerFightStats.fight_id == models.Fight.id)
+        .where(
+            and_( # Use 'and_' for multiple conditions
+                models.Fight.report_id == report.id,
+                models.Player.name.in_(all_player_names)
+            )
+        )
+    )
+
+    # --- Modified Filter Logic ---
+    if boss_name:
+        # Filter by Fight.name instead of Fight.boss_id
+        query = query.where(models.Fight.name == boss_name)
+        logger.debug(f"Filtering aggregation by boss name: {boss_name}")
+    # --- End Modified Filter Logic ---
+
+    # Execute the query to get raw per-fight stats for all relevant players
+    result = await db.execute(query)
+    player_fight_data = result.all() # Fetch all rows (player_name, boss_name, damage, healing)
+
+    # Process the raw data in Python to aggregate per player
+    player_aggregated_stats: Dict[str, Dict] = {} # { player_name: {'damage': float, 'healing': float, 'bosses': set} }
+
+    for player_name, boss_name, damage, healing in player_fight_data:
+        if player_name not in player_aggregated_stats:
+            player_aggregated_stats[player_name] = {
+                "total_damage": 0.0,
+                "total_healing": 0.0,
+                "boss_names": set() # Use a set to store unique boss names
+            }
+        player_aggregated_stats[player_name]["total_damage"] += damage or 0.0
+        player_aggregated_stats[player_name]["total_healing"] += healing or 0.0
+        if boss_name: # Avoid adding None if fight name is null
+             player_aggregated_stats[player_name]["boss_names"].add(boss_name)
+
+    # Structure the results according to the input groups
+    final_group_stats: Dict[str, List[schemas.PlayerGroupStats]] = {group_name: [] for group_name in groups}
+
+    for group_name, group_player_names in groups.items():
+        for player_name in group_player_names:
+            if player_name in player_aggregated_stats:
+                stats = player_aggregated_stats[player_name]
+                final_group_stats[group_name].append(
+                    schemas.PlayerGroupStats(
+                        player_name=player_name,
+                        # Convert set to sorted list for consistent output
+                        boss_names=sorted(list(stats["boss_names"])),
+                        total_damage=stats["total_damage"],
+                        total_healing=stats["total_healing"]
+                    )
+                )
+            # else: Player was in the group definition but had no stats in the filtered fights (or report)
+
+    logger.debug(f"Aggregated stats for report {report_code} (Boss: {boss_name or 'All'}): {final_group_stats}")
+    return final_group_stats

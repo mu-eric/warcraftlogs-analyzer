@@ -1,5 +1,5 @@
 import uvicorn
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 import crud
 import models
@@ -10,6 +10,7 @@ import logging # Import logging
 import os # Import os
 import httpx # ADDED IMPORT
 from pydantic import BaseModel # Ensure BaseModel is imported here
+from typing import List, Optional, Dict
 
 # logger instance creation
 logger = logging.getLogger(__name__)
@@ -266,6 +267,36 @@ async def read_detailed_report(report_code: str, db: AsyncSession = Depends(get_
     if db_report is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
     return db_report
+
+@app.post("/reports/{report_code}/aggregate-stats", response_model=schemas.GroupStatsResponse)
+async def get_aggregated_stats(
+    report_code: str,
+    group_def: schemas.GroupDefinitionRequest,
+    boss_name: Optional[str] = Query(None, description="Optional boss name to filter by (e.g., 'Kurog Grimtotem')"),
+    db: AsyncSession = Depends(get_db)
+):
+    """Calculates aggregated damage AND healing for defined player groups in a report,
+    broken down by player.
+
+    - **report_code**: The unique code of the Warcraft Logs report.
+    - **Request Body**: A JSON object mapping group names to lists of player names.
+      Example: `{"group1": ["PlayerA", "PlayerB"], "group2": ["PlayerC"]}`
+    - **boss_name** (Query Parameter): Optional. The exact name of a boss/encounter to filter the calculation.
+      If omitted, stats across all fights in the report are aggregated.
+      Example: `?boss_name=Terros` or `?boss_name=Kurog%20Grimtotem` (URL encoded)
+    """
+    logger.info(f"Received request to aggregate stats for report {report_code}, groups: {group_def.groups}, boss_name: {boss_name}")
+
+    # Call the updated CRUD function
+    group_stats_data = await crud.aggregate_stats_by_group(
+        db=db,
+        report_code=report_code,
+        groups=group_def.groups,
+        boss_name=boss_name
+    )
+
+    # Return using the updated response schema
+    return schemas.GroupStatsResponse(group_stats=group_stats_data)
 
 # Add a simple root endpoint for testing
 @app.get("/")
