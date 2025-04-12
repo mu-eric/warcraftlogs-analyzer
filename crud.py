@@ -5,6 +5,7 @@ import schemas
 import logging
 from typing import Optional, Dict, List
 from sqlalchemy.orm import selectinload
+from sqlalchemy import func, select, and_, delete
 from sqlalchemy import func, select, and_
 
 logger = logging.getLogger(__name__)
@@ -84,15 +85,37 @@ async def get_detailed_report_by_code(db: AsyncSession, report_code: str) -> Opt
     )
     return result.scalars().first()
 
+async def delete_report_by_code(db: AsyncSession, report_code: str):
+    """Deletes a report and its associated data (Players, Fights, PlayerFightStats) by report code."""
+    logger.info(f"Attempting to delete report and associated data for code: {report_code}")
+    # First, find the report to ensure it exists and get its ID
+    report = await get_report_by_code(db, report_code)
+    if report:
+        report_id = report.id
+        # Delete associated Player records first due to direct ForeignKey
+        # Use synchronize_session=False for potentially better performance with async
+        delete_players_stmt = delete(models.Player).where(models.Player.report_id == report_id)
+        await db.execute(delete_players_stmt)
+        logger.debug(f"Deleted Player records associated with report_id {report_id}")
+
+        # Now delete the report. Cascades should handle Fights and PlayerFightStats.
+        await db.delete(report)
+        await db.flush() # Ensure deletion is processed before potentially creating new
+        logger.info(f"Successfully deleted report {report_code} (ID: {report_id}) and cascaded data.")
+        return True
+    else:
+        logger.warning(f"Report code {report_code} not found for deletion.")
+        return False
+
 # --- Aggregation CRUD ---
 async def aggregate_stats_by_group(
     db: AsyncSession,
     report_code: str,
     groups: Dict[str, List[str]],
-    boss_name: Optional[str] = None
+    boss_names: Optional[List[str]] = None
 ) -> Dict[str, List[schemas.PlayerGroupStats]]:
     """Calculates detailed damage and healing stats for players within predefined groups
-       in a report, optionally filtered by a specific boss name.
+       in a report, optionally filtered by a list of specific boss names.
     """
     report = await get_report_by_code(db, report_code)
     if not report:
@@ -123,10 +146,10 @@ async def aggregate_stats_by_group(
     )
 
     # --- Modified Filter Logic ---
-    if boss_name:
-        # Filter by Fight.name instead of Fight.boss_id
-        query = query.where(models.Fight.name == boss_name)
-        logger.debug(f"Filtering aggregation by boss name: {boss_name}")
+    if boss_names: # Check if the list is provided and non-empty
+        # Filter by Fight.name being in the provided list
+        query = query.where(models.Fight.name.in_(boss_names))
+        logger.debug(f"Filtering aggregation by boss names: {boss_names}")
     # --- End Modified Filter Logic ---
 
     # Execute the query to get raw per-fight stats for all relevant players
@@ -166,5 +189,5 @@ async def aggregate_stats_by_group(
                 )
             # else: Player was in the group definition but had no stats in the filtered fights (or report)
 
-    logger.debug(f"Aggregated stats for report {report_code} (Boss: {boss_name or 'All'}): {final_group_stats}")
+    logger.debug(f"Aggregated stats for report {report_code} (Bosses: {boss_names or 'All'}): {final_group_stats}")
     return final_group_stats

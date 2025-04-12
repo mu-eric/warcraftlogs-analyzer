@@ -137,7 +137,7 @@ class ReportProcessRequest(BaseModel):
     report_url: HttpUrl
 
 # Update forward references
-Fight.update_forward_refs()
-Player.update_forward_refs()
-PlayerFightStats.update_forward_refs()
-Report.update_forward_refs()
+Fight.model_rebuild()
+Player.model_rebuild()
+PlayerFightStats.model_rebuild()
+Report.model_rebuild()

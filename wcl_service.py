@@ -137,14 +137,16 @@ async def fetch_report_data(report_code: str) -> dict:
                 startTime
                 endTime
                 zone { id name }
-                fights {
+                fights(translate: true) {
                   id
+                  startTime
+                  endTime
                   name
                   encounterID
                 }
-            }
-        }
-    }
+             }
+         }
+     }
     """
     variables = {"reportCode": report_code}
     token = await get_access_token()
@@ -180,16 +182,19 @@ async def fetch_report_data(report_code: str) -> dict:
                 "code": report_info.get("code"),
                 "title": report_info.get("title"),
                 "owner": report_info.get("owner", {}).get("name"),
-                "startTime": datetime.fromtimestamp(report_info.get("startTime", 0) / 1000),
-                "endTime": datetime.fromtimestamp(report_info.get("endTime", 0) / 1000),
+                # Return raw WCL timestamps (milliseconds)
+                "startTime": report_info.get("startTime"), 
+                "endTime": report_info.get("endTime"),   
                 "zone_id": report_info.get("zone", {}).get("id"),
                 "zone_name": report_info.get("zone", {}).get("name"),
+                # Include the raw fights list needed by the main processing logic
+                "fights": report_info.get("fights", []) 
             }
             logger.debug(f"WCL_SERVICE: Extracted report metadata: {report_metadata}")
 
-            # Extract fights list
-            fights_list = report_info.get("fights", [])
-            logger.debug(f"WCL_SERVICE: Extracted fights: {fights_list}")
+            # Extract fights list (used for subsequent table fetches)
+            fights_list = report_info.get("fights", []) # Keep this local variable too
+            logger.debug(f"WCL_SERVICE: Extracted {len(fights_list)} fights for table fetching.")
 
             # --- Subsequent requests: Get Tables per Boss Fight --- 
             fight_specific_data = {}
