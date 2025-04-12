@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "warcraftlogs-analyzer"
+version = "0.1.0"
+description = "A tool to analyze Warcraft Logs reports."
+readme = "README.md" # We can create this later
+requires-python = ">=3.8" # Match lowest supported Python version
+license = { file = "LICENSE" } # Assuming MIT based on previous context
+authors = [
+  { name = "Your Name", email = "your.email@example.com" }, # TODO: Update with actual author info
+]
+
+# List runtime dependencies here
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]", # Includes standard ASGI server features
+    "sqlalchemy",
+    "aiosqlite",         # Async driver for SQLite
+    "httpx",             # Async HTTP client
+    "beautifulsoup4",    # HTML parsing (optional, but kept for now)
+    "lxml",              # XML/HTML parser (often used with bs4)
+    "python-dotenv"      # For loading .env files
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    # Add other development tools like linters if needed, though Ruff is handled by extension
+]
+
+[project.urls]
+"Homepage" = "https://github.com/your-username/warcraftlogs-analyzer" # TODO: Update URL
+"Bug Tracker" = "https://github.com/your-username/warcraftlogs-analyzer/issues" # TODO: Update URL
+
+# Explicitly tell setuptools which modules to include
+[tool.setuptools]
+py-modules = ["main", "crud", "database", "models", "schemas", "wcl_service"]
+
+# Configuration for tools like Ruff could go here too
+# [tool.ruff]
+# ...
+
+# --- Pytest Configuration ---
+[tool.pytest.ini_options]
+python_files = "tests.py test_*.py *_test.py"
+asyncio_mode = "auto" # Automatically handle asyncio tests
+# Add test paths if your tests are in a specific directory, e.g.:
+# testpaths = [
+#     "tests",
+# ]
+addopts = "-p no:warnings" # Example: Suppress warnings during tests (optional)
+# You can add more options here, like markers, coverage config, etc.

@@ -1,0 +1,65 @@
+{
+	"name": "Warcraft Logs Analyzer",
+	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
+	"build": {
+		// Path is relative to the devcontainer.json file.
+		"dockerfile": "Dockerfile"
+	},
+
+	// Use 'forwardPorts' to make a list of ports inside the container available locally.
+	"forwardPorts": [8000],
+
+	// Use 'postCreateCommand' to run commands after the container is created.
+	// Syncs deps, installs project + dev deps, adds alias
+	"postCreateCommand": "uv pip sync pyproject.toml && uv pip install -e .[dev] && echo 'alias pip=\"uv pip\"' >> ~/.bashrc",
+
+	// Configure tool-specific properties.
+	"customizations": {
+		// Configure properties specific to VS Code.
+		"vscode": {
+			// Set *default* container specific settings.json values on container create.
+			"settings": {
+                // --- General Editor Settings ---
+                "editor.formatOnSave": true,
+                "editor.rulers": [88],
+                "files.insertFinalNewline": true,
+                "files.trimFinalNewlines": true,
+                "files.trimTrailingWhitespace": true,
+
+                // --- Python Specific Settings ---
+                "python.analysis.typeCheckingMode": "basic", // Or "strict"
+                "python.testing.pytestArgs": [
+                    "."
+                ],
+                "python.testing.unittestEnabled": false,
+                "python.testing.pytestEnabled": true,
+
+                // --- Formatter & Linter Settings (Ruff) ---
+                "[python]": {
+                    "editor.defaultFormatter": "charliermarsh.ruff",
+                    "editor.codeActionsOnSave": {
+                        "source.fixAll": "explicit", // Use "explicit" for Ruff v0.3.0+
+                        "source.organizeImports": "explicit" // Use "explicit" for Ruff v0.3.0+
+                    }
+                },
+                "ruff.enable": true,
+                "ruff.lint.args": [
+                  // Example: add specific rules if needed, like linters
+                  // "--select=E,F,W,I,N,D,UP,B,A,C4,T20,PYI,PT,Q,RET,SIM,TID,ARG,RUF"
+                  // Or just use defaults initially
+                ],
+                "ruff.format.args": []
+            },
+
+			// Add the IDs of extensions you want installed when the container is created.
+			"extensions": [
+				"ms-python.python",
+				"ms-python.vscode-pylance",
+				"ms-python.debugpy",
+				"charliermarsh.ruff", // Linter and formatter
+				"visualstudioexptteam.vscodeintellicode",
+				"eamodio.gitlens" // Git supercharger
+			]
+		}
+	}
+}
