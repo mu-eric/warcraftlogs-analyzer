@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "A tool to analyze Warcraft Logs reports."
 readme = "README.md" # We can create this later
 requires-python = ">=3.8" # Match lowest supported Python version
-license = { file = "LICENSE" } # Assuming MIT based on previous context
+license = "MIT" # Assuming MIT based on previous context; Changed from { file = "LICENSE" }
 authors = [
   { name = "Your Name", email = "your.email@example.com" }, # TODO: Update with actual author info
 ]
@@ -22,7 +22,8 @@ dependencies = [
     "httpx",             # Async HTTP client
     "beautifulsoup4",    # HTML parsing (optional, but kept for now)
     "lxml",              # XML/HTML parser (often used with bs4)
-    "python-dotenv"      # For loading .env files
+    "python-dotenv",     # For loading .env files
+    "alembic"            # For database migrations
 ]
 
 [project.optional-dependencies]

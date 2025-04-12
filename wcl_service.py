@@ -124,122 +124,159 @@ async def fetch_fight_tables(report_code: str, fight_id: int) -> dict:
             return None
 
 
-async def fetch_report_data(report_code: str) -> dict:
-    """Fetches report metadata, fights, and then damage/healing tables per boss fight."""
-    # Initial query for metadata and fights list
-    graphql_query_metadata = """
-    query ReportMetadataAndFights($reportCode: String!) {
-        reportData {
-            report(code: $reportCode) {
-                code
-                title
-                owner { name }
-                startTime
-                endTime
-                zone { id name }
-                fights(translate: true) {
-                  id
-                  startTime
-                  endTime
-                  name
-                  encounterID
-                }
-             }
-         }
-     }
-    """
-    variables = {"reportCode": report_code}
+async def fetch_report_data(report_code: str) -> dict | None:
+    logger.info(f"Fetching report data for {report_code}")
     token = await get_access_token()
     if not token:
         return None
 
-    headers = {"Authorization": f"Bearer {token}"}
-    async with httpx.AsyncClient() as client:
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    variables = {"reportCode": report_code}
+
+    report_info = None
+    fights_raw = []
+    master_data = {}
+    all_events_combined = []
+
+    # Create client ONCE to use for both calls
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        # Fetch metadata including fights and master data
+        metadata_query = """
+        query ReportMetadata($reportCode: String!) {
+            reportData {
+                report(code: $reportCode) {
+                    code
+                    title
+                    startTime
+                    endTime
+                    zone { id name }
+                    fights {
+                        id
+                        startTime
+                        endTime
+                        name
+                        kill
+                        difficulty
+                        bossPercentage
+                        averageItemLevel
+                    }
+                    masterData(translate: true) {
+                        actors(type: "Player") {
+                            id
+                            name
+                            subType
+                            server
+                        }
+                        abilities {
+                            gameID
+                            name
+                        }
+                    }
+                }
+            }
+        }
+        """
         try:
-            # --- First request: Get Metadata and Fights --- 
-            logger.debug(f"WCL_SERVICE: Fetching metadata and fights for report {report_code}")
-            response = await client.post(
-                WCL_API_V2_URL,
-                json={"query": graphql_query_metadata, "variables": variables},
+            logger.info(f"Fetching metadata for report {report_code}")
+            metadata_response = await client.post(
+                WCL_API_V2_URL, # Use constant for V2 API
+                json={"query": metadata_query, "variables": variables},
                 headers=headers,
             )
-            response.raise_for_status()
-            data = response.json()
-
-            if "errors" in data:
-                logger.error(f"GraphQL error fetching metadata/fights: {data['errors']}")
-                return None
-
-            report_info = data.get("data", {}).get("reportData", {}).get("report", {})
+            metadata_response.raise_for_status()
+            report_data_root = metadata_response.json().get("data", {}).get("reportData", {})
+            report_info = report_data_root.get("report", {})
             if not report_info:
-                logger.error("Could not extract report info from WCL response.")
+                logger.error(f"No report found in metadata response for {report_code}")
                 return None
-
-            logger.debug(f"Extracted report_info structure (metadata/fights): {report_info}")
-
-            # Extract report metadata
-            report_metadata = {
-                "code": report_info.get("code"),
-                "title": report_info.get("title"),
-                "owner": report_info.get("owner", {}).get("name"),
-                # Return raw WCL timestamps (milliseconds)
-                "startTime": report_info.get("startTime"), 
-                "endTime": report_info.get("endTime"),   
-                "zone_id": report_info.get("zone", {}).get("id"),
-                "zone_name": report_info.get("zone", {}).get("name"),
-                # Include the raw fights list needed by the main processing logic
-                "fights": report_info.get("fights", []) 
-            }
-            logger.debug(f"WCL_SERVICE: Extracted report metadata: {report_metadata}")
-
-            # Extract fights list (used for subsequent table fetches)
-            fights_list = report_info.get("fights", []) # Keep this local variable too
-            logger.debug(f"WCL_SERVICE: Extracted {len(fights_list)} fights for table fetching.")
-
-            # --- Subsequent requests: Get Tables per Boss Fight --- 
-            fight_specific_data = {}
-            boss_fight_count = 0
-
-            for fight in fights_list:
-                fight_id = fight.get("id")
-                is_boss_fight = fight.get("encounterID", 0) != 0 # encounterID=0 means trash
-                fight_name = fight.get("name")
-
-                if is_boss_fight and fight_id:
-                    boss_fight_count += 1
-                    logger.info(f"WCL_SERVICE: Fetching data for Boss Fight ID: {fight_id}, Name: {fight_name}")
-                    # Fetch damage/healing tables for this specific boss fight
-                    fight_tables = await fetch_fight_tables(report_code, fight_id)
-                    
-                    if fight_tables:
-                        # Process and store fight-specific data (placeholder logic)
-                        # TODO: Adapt downstream processing (crud.py, models.py) for this structure
-                        fight_specific_data[fight_id] = {
-                            "name": fight_name,
-                            "damageTable": fight_tables.get("damageTable"),
-                            "healingTable": fight_tables.get("healingTable")
-                        }
-                        logger.debug(f"WCL_SERVICE: Successfully stored data for fight {fight_id}")
-                    else:
-                        logger.warning(f"WCL_SERVICE: Failed to fetch tables for boss fight {fight_id}. Skipping.")
-            
-            logger.info(f"WCL_SERVICE: Fetched data for {boss_fight_count} boss fights.")
-            logger.debug(f"WCL_SERVICE: Aggregated fight-specific data: {fight_specific_data}") # Log the final structure for now
-
-            # Combine metadata and processed fight data (adjust structure as needed)
-            # For now, return metadata and the new fight_specific_data dict
-            # The downstream processing logic needs to be updated to handle this new structure
-            return {
-                "metadata": report_metadata,
-                "fight_data": fight_specific_data 
-            }
+            else:
+                fights_raw = report_info.get("fights", [])
+                master_data = report_info.get("masterData", {})
+                logger.debug(f"WCL_SERVICE: Extracted metadata, {len(fights_raw)} fights, actors: {len(master_data.get('actors', []))}")
 
         except httpx.HTTPStatusError as e:
-            logger.error(f"HTTP error during report processing: {e.response.status_code} - {e.response.text}")
-            return None
-        except httpx.RequestError as e:
-            logger.error(f"Request error during report processing: {e}")
+            logger.error(f"HTTP error fetching metadata for {report_code}: {e.response.status_code} - {e.response.text}")
             return None
         except Exception as e:
-            logger.exception(f"Unexpected error during report processing: {e}") # Use exception for stack trace
+            logger.error(f"Error fetching metadata for {report_code}: {e}", exc_info=True)
             return None
+
+        # Extract necessary info for event query
+        report_metadata = {
+            "report_code": report_info.get("code"),
+            "title": report_info.get("title"),
+            "start_time_ms": report_info.get("startTime"),
+            "end_time_ms": report_info.get("endTime"),
+            "zone_id": report_info.get("zone", {}).get("id"),
+            "zone_name": report_info.get("zone", {}).get("name"),
+        }
+        fight_ids = [f.get('id') for f in fights_raw if f.get('id') is not None]
+        start_time = report_metadata['start_time_ms']
+        end_time = report_metadata['end_time_ms']
+
+        if not fight_ids or start_time is None or end_time is None:
+            logger.warning(f"Missing data needed for event query (fights/times) for {report_code}. Skipping event fetch.")
+        else:
+            # Fetch events for ALL fights using the SAME client
+            event_variables = {
+                "reportCode": report_code,
+                "fightIDs": fight_ids,
+                "startTime": 0,
+                "endTime": end_time - start_time,
+                "limit": 10000
+            }
+            event_query = """
+            query ReportEvents($reportCode: String!, $fightIDs: [Int], $startTime: Float!, $endTime: Float!, $limit: Int) {
+                reportData {
+                    report(code: $reportCode) {
+                        events(fightIDs: $fightIDs, startTime: $startTime, endTime: $endTime, limit: $limit) {
+                            data
+                            nextPageTimestamp
+                        }
+                    }
+                }
+            }
+            """
+            try:
+                logger.info(f"Fetching events for report {report_code}, fights: {fight_ids}")
+                event_response = await client.post(
+                    WCL_API_V2_URL, # Use constant for V2 API
+                    json={"query": event_query, "variables": event_variables},
+                    headers=headers,
+                )
+                event_response.raise_for_status()
+                event_data_container = event_response.json().get("data", {}).get("reportData", {}).get("report", {}).get("events", {})
+                all_events_combined = event_data_container.get("data", [])
+                logger.info(f"Fetched {len(all_events_combined)} events for report {report_code}")
+                # TODO: Implement pagination using nextPageTimestamp if necessary
+            except httpx.HTTPStatusError as e:
+                 logger.error(f"HTTP error fetching events for {report_code}: {e.response.status_code} - {e.response.text}")
+                 # Continue without events, maybe?
+            except Exception as e:
+                logger.error(f"Error fetching events for report {report_code}: {e}", exc_info=True)
+                # Continue without events
+
+    # Process fights (outside the client block)
+    processed_fights = [
+        {
+            "wcl_fight_id": fight.get("id"),
+            "start_time_ms": fight.get("startTime"),
+            "end_time_ms": fight.get("endTime"),
+            "start_offset_ms": fight.get("startTime", 0) - report_metadata.get("start_time_ms", 0),
+            "end_offset_ms": fight.get("endTime", 0) - report_metadata.get("start_time_ms", 0),
+            "name": fight.get("name"),
+            "kill": fight.get("kill"),
+            "difficulty": fight.get("difficulty"),
+            "boss_percentage": fight.get("bossPercentage"),
+            "average_item_level": fight.get("averageItemLevel"),
+        }
+        for fight in fights_raw
+    ]
+
+    logger.info(f"Finished fetching data for {report_code}")
+    return {
+        "metadata": report_metadata,
+        "fights": processed_fights,
+        "master_data": master_data,
+        "events": {"data": all_events_combined}
+    }
